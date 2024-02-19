@@ -1,6 +1,7 @@
 /* eslint-disable no-mixed-spaces-and-tabs */
 import {
   Accordion,
+  Alert,
   Button,
   Divider,
   Kbd,
@@ -12,7 +13,9 @@ import {
   Slider,
   Switch,
   Tabs,
+  Text,
   TextInput,
+  Title,
   Tooltip,
 } from '@mantine/core';
 import {
@@ -28,7 +31,9 @@ import {
   updateNotification,
 } from '@mantine/notifications';
 import {
+  IconAlertCircle,
   IconAlertTriangle,
+  IconBoxMultiple,
   IconBrush,
   IconCheck,
   IconChevronRight,
@@ -55,22 +60,9 @@ import {
 } from '@tabler/icons';
 import { AnimatePresence, motion, Transition, Variants } from 'framer-motion';
 import React, { ReactNode, useEffect, useRef, useState } from 'react';
+import { Settings, Field, Api } from './api';
 
-type Field = {
-  x: number;
-  y: number;
-  name: string;
-  selected: boolean;
-  highlighted: boolean;
-  id: number;
-  size: number;
-  image?: {
-    opacity: number;
-    path: string;
-    saturation: boolean;
-  };
-  rename: boolean;
-};
+const SZ_MULTIPLIER = 5.555555555555555;
 
 const App = () => {
   const [fields, setFieldsClean] = useState<Field[]>([]);
@@ -83,21 +75,46 @@ const App = () => {
   const [recent, setRecent] = useState<string[]>([]);
   const [renderStart, setRenderStart] = useState(0);
   const [renderEnd, setRenderEnd] = useState(0);
-  const [settings, setSettings] = useState<{
-    theme: 'light' | 'dark';
-    keepNavOpen: boolean;
-    centerNav: boolean;
-  }>(undefined);
+  const [settings, setSettings] = useState<Settings>(undefined);
   const titleBar = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<JSX.Element>();
 
+  const [_reloadState, reloadState] = useState(true);
+
+  window.addEventListener('resize', () => reloadState((v) => !v));
+
+  const [resourcePath, setResourcePath] = useState('');
+  function getResourcePath(file: string) {
+    if (!resourcePath || resourcePath.length < 1) return '';
+    return (
+      'file:///' +
+      resourcePath +
+      (!resourcePath.endsWith('/') && resourcePath.length > 0 ? '/' : '') +
+      (file.startsWith('/') ? file.substring(1) : file)
+    );
+  }
+
+  async function getImageSizes(path: string) {
+    await fetch(path);
+    const el = document.createElement('img');
+    el.src = path;
+    await new Promise((r) =>
+      el.naturalWidth > 0 && el.naturalHeight > 0
+        ? r(undefined)
+        : el.addEventListener('load', r)
+    );
+    document.body.append(el);
+    const size = {
+      width: el.naturalWidth,
+      height: el.naturalHeight,
+    };
+    el.remove();
+    return size;
+  }
+
   useEffect(() => {
-    fetch('http://localhost:736/settings')
-      .then((res) => res.json())
-      .then((res) => {
-        setSettings(res);
-        0;
-      });
+    Api.getSettings().then(setSettings);
+    Api.getResourcePath().then(setResourcePath);
   }, []);
 
   useWindowEvent('blur', () => {
@@ -126,8 +143,9 @@ const App = () => {
         selected: true,
         highlighted: false,
         id: fieldIndex + 1 + i,
-        size: 100,
         rename: false,
+        height: 18,
+        width: 18,
       };
       clonedFields.push(field);
     });
@@ -180,15 +198,22 @@ const App = () => {
         case 'down':
           if (
             f.y + step >= 0 &&
-            f.y + step <= guiImg.current.offsetHeight - f.size
+            f.y + step <=
+              guiImg.current.offsetHeight -
+                f.height * SZ_MULTIPLIER * (f.scale || 0)
           )
             f.y += step;
-          else f.y = guiImg.current.offsetWidth - f.size;
+          else
+            f.y =
+              guiImg.current.offsetWidth -
+              f.width * SZ_MULTIPLIER * (f.scale || 0);
           break;
         case 'up':
           if (
             f.y - step >= 0 &&
-            f.y - step <= guiImg.current.offsetHeight - f.size
+            f.y - step <=
+              guiImg.current.offsetHeight -
+                f.height * SZ_MULTIPLIER * (f.scale || 0)
           )
             f.y -= step;
           else f.y = 0;
@@ -196,7 +221,9 @@ const App = () => {
         case 'left':
           if (
             f.x - step >= 0 &&
-            f.x - step <= guiImg.current.offsetWidth - f.size
+            f.x - step <=
+              guiImg.current.offsetWidth -
+                f.width * SZ_MULTIPLIER * (f.scale || 0)
           )
             f.x -= step;
           else f.x = 0;
@@ -205,10 +232,15 @@ const App = () => {
         case 'right':
           if (
             f.x + step >= 0 &&
-            f.x + step <= guiImg.current.offsetWidth - f.size
+            f.x + step <=
+              guiImg.current.offsetWidth -
+                f.width * SZ_MULTIPLIER * (f.scale || 0)
           )
             f.x += step;
-          else f.x = guiImg.current.offsetWidth - f.size;
+          else
+            f.x =
+              guiImg.current.offsetWidth -
+              f.width * SZ_MULTIPLIER * (f.scale || 0);
           break;
       }
 
@@ -230,24 +262,30 @@ const App = () => {
     > = {};
 
     const draw = (ctx: CanvasRenderingContext2D) => {
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(guiImg.current, 0, 0, 176 * 4, 168 * 4);
       fields.forEach((f) => {
+        fieldImg.current.src = f.texture
+          ? f.texture
+          : getResourcePath('minecraft_inv_field_small.png');
         ctx.drawImage(
           fieldImg.current,
           Math.floor(f.x / 1.36),
           Math.floor(f.y / 1.36),
-          (f.size / 100) * 32 * 2,
-          (f.size / 100) * 32 * 2
+          (f.width !== 18 ? 3.55555555556 : 4) * f.width * (f.scale || 1),
+          (f.width !== 18 ? 3.55555555556 : 4) * f.height * (f.scale || 1)
         );
-        if (f.image && imageRefs[f.id]?.current) {
+        if (f.image && imageRefs[f.id]?.current && !f.texture) {
           ctx.filter = `saturate(${f.image.saturation ? '100%' : '0%'})`;
           ctx.globalAlpha = f.image.opacity;
           ctx.drawImage(
             imageRefs[f.id].current,
-            Math.floor(f.x / 1.36 + 6),
-            Math.floor(f.y / 1.36 + 6),
-            64 * 0.8,
-            64 * 0.8
+            Math.floor(f.x / 1.36 + 8),
+            Math.floor(f.y / 1.36 + 8),
+            (f.width !== 18 ? 3.55555555556 : 4) * f.width * (f.scale || 1) -
+              18,
+            (f.width !== 18 ? 3.55555555556 : 4) * f.height * (f.scale || 1) -
+              18
           );
           ctx.filter = 'none';
           ctx.globalAlpha = 1;
@@ -359,13 +397,22 @@ const App = () => {
               Save & Copy
             </Menu.Item>
           </Menu>
+          <Title>Fields</Title>
+          {fields
+            .filter((el) => !el.name.startsWith('__'))
+            .map((el) => (
+              <Text key={el.name}>
+                {el.name}: X: {el.x + 1} | Y: {el.y + 1} | Width: {el.width - 2}{' '}
+                | Height: {el.height - 2}
+              </Text>
+            ))}
         </div>
         <div>
           <canvas
             className="inline"
             ref={canvasRef}
-            width={256 * 4}
-            height={256 * 4}
+            width={176 * 4}
+            height={168 * 4}
           />
         </div>
         <div className="hidden">
@@ -430,85 +477,77 @@ const App = () => {
 
   const openFile = (filePath?: string) => {
     setScreen('editor');
-    fetch('http://localhost:736/editor');
+    Api.setEditorRpc();
     setTimeout(() => {
       setLoadingOverlay(true);
-      fetch('http://localhost:736/open', {
-        method: 'get',
-        headers: {
-          filePath: filePath,
-        },
-      })
-        .then((res) => res.json())
-        .then((res) => {
-          const resType: {
-            fieldIndex: number;
-            fields: Field[];
-            filePath: string;
-          } = res;
+      Api.open(filePath).then((res) => {
+        if (!res) return;
+        const resType: {
+          fieldIndex: number;
+          fields: Field[];
+          filePath: string;
+        } = res;
 
-          setFieldIndex(resType.fieldIndex);
-          setFile(resType.filePath);
-          setDocTitle(`${resType.filePath.split('\\').pop()} - Graintfa`);
-          setLoadingOverlay(false);
-          setFieldsClean(
-            resType.fields.map((x) => {
-              x.selected = false;
-              x.highlighted = false;
-              x.rename = false;
-              return x;
-            })
-          );
-          showNotification({
-            title: 'File loaded!',
-            message: `Loaded ${resType.filePath.split('\\').pop()} from ${
-              resType.filePath
-            }!`,
-            color: 'cyan',
-            icon: <IconFolder></IconFolder>,
-          });
+        setFieldIndex(resType.fieldIndex);
+        setFile(resType.filePath);
+        setDocTitle(`${resType.filePath.split('\\').pop()} - Graintfa`);
+        setLoadingOverlay(false);
+        setFieldsClean(
+          resType.fields.map((x) => {
+            x.selected = false;
+            x.highlighted = false;
+            x.rename = false;
+            return x;
+          })
+        );
+        showNotification({
+          title: 'File loaded!',
+          message: `Loaded ${resType.filePath.split('\\').pop()} from ${
+            resType.filePath
+          }!`,
+          color: 'cyan',
+          icon: <IconFolder></IconFolder>,
         });
+      });
     }, 400);
   };
 
   const saveFile = (filePath?: string, cb?: () => void) => {
     setLoadingOverlay(true);
-    fetch('http://localhost:736/save', {
-      method: 'post',
-      headers: {
-        fields: JSON.stringify(
-          fields.map((f) => {
-            f.rename = false;
-            return f;
-          })
-        ),
-        fieldIndex: fieldIndex.toString(),
-        filePath,
-      },
-    })
-      .then((res) => res.json())
-      .then((res) => {
-        setLoadingOverlay(false);
-        const file: string = res.filePath;
-        setFile(file);
-        setDocTitle(`${file.split('\\').pop()} - Graintfa`);
+    Api.save({
+      fields: fields.map((f) => {
+        f.rename = false;
+        return f;
+      }),
+      filePath: filePath || '',
+      fieldIndex,
+    }).then((file) => {
+      setLoadingOverlay(false);
+      if (!file) return;
+      setFile(file);
+      setDocTitle(`${file.split('\\').pop()} - Graintfa`);
 
-        showNotification({
-          title: 'File saved!',
-          message: `Saved ${file.split('\\').pop()} to ${file}.`,
-          color: 'green',
-          icon: <IconDeviceFloppy />,
-        });
-        if (cb) cb();
+      showNotification({
+        title: 'File saved!',
+        message: `Saved ${file.split('\\').pop()} to ${file}.`,
+        color: 'green',
+        icon: <IconDeviceFloppy />,
       });
+      if (cb) cb();
+    });
   };
 
   const openHomeScreen = () => {
-    if (screen != 'start')
-      askForClose(() => {
+    if (screen !== 'start')
+      if (document.title.startsWith('*'))
+        askForClose(() => {
+          setLoadingOverlay(true);
+          window.location.reload();
+        });
+      else {
         setLoadingOverlay(true);
         window.location.reload();
-      });
+      }
     else
       showNotification({
         message: "You're already on the start screen!",
@@ -545,7 +584,7 @@ const App = () => {
       onPress: () => {
         const selectedFields = fields.filter((f) => f.selected);
 
-        if (selectedFields.length > 1) return;
+        if (selectedFields.length < 1) return;
 
         const field = fields.find((f) => f.id === selectedFields[0].id);
 
@@ -940,25 +979,35 @@ const App = () => {
     return (
       <div
         style={{
-          width: `${f.size}px`,
-          height: `${f.size}px`,
-          top: `${f.y + guiImg.current.offsetTop}px`,
-          left: `${f.x + guiImg.current.offsetLeft}px`,
+          width: `${f.width * SZ_MULTIPLIER * (f.scale || 1)}px`,
+          height: `${f.height * SZ_MULTIPLIER * (f.scale || 1)}px`,
+          top: `${f.y + guiImg.current.offsetTop - (f.selected ? 4 : 0)}px`,
+          left: `${f.x + guiImg.current.offsetLeft - (f.selected ? 4 : 0)}px`,
         }}
         className="absolute"
       >
         <img
           draggable="false"
           ref={fieldImg}
-          src="http://localhost:736/assets/minecraft_inv_field.png"
-          width={f.size}
-          className={`absolute top-0 left-0 ${
+          src={
+            f.texture
+              ? f.texture
+              : getResourcePath('minecraft_inv_field_small.png')
+          }
+          width={f.width * SZ_MULTIPLIER * (f.scale || 1)}
+          height={f.height * SZ_MULTIPLIER * (f.scale || 1)}
+          className={`absolute top-0 left-0 border-opacity-70 ${
             f.selected
               ? 'border-4 border-blue-500'
               : f.highlighted
               ? 'border-4 border-yellow-400'
               : ''
-          } pointer-events-auto`}
+          } pointer-events-auto box-content ${
+            f.selected || f.highlighted ? 'z-10' : ''
+          }`}
+          style={{
+            imageRendering: 'pixelated',
+          }}
           onContextMenu={(e) => {
             setContextMenu(
               <FieldMenu id={f.id} x={e.clientX} y={e.clientY}></FieldMenu>
@@ -989,18 +1038,24 @@ const App = () => {
             setFields(fields.map((f) => f));
           }}
         />
-        {f.image ? (
+        {f.image && !f.texture ? (
           <div
-            className="grid place-items-center absolute top-0 left-0"
-            style={{ width: `${f.size}px`, height: `${f.size}px` }}
+            className={`grid place-items-center absolute ${
+              f.selected ? 'top-[4px] left-[4px]' : 'top-0 left-0'
+            }`}
+            style={{
+              width: `${f.width * SZ_MULTIPLIER * (f.scale || 1)}px`,
+              height: `${f.height * SZ_MULTIPLIER * (f.scale || 1)}px`,
+            }}
           >
             <img
               src={f.image.path}
-              className={`w-[75px] h-[75px] ${
+              className={`w-[75px] h-[75px] ${f.selected ? 'z-30' : ''} ${
                 !f.image.saturation ? 'saturate-0' : ''
               }`}
               style={{
                 opacity: f.image.opacity,
+                imageRendering: 'pixelated',
               }}
             />
           </div>
@@ -1078,7 +1133,7 @@ const App = () => {
           label="Rename"
           hotkey="Ctrl+W"
           onClick={() => {
-            fields[fieldIndex].rename = true;
+            if (fields[fieldIndex]) fields[fieldIndex].rename = true;
             setFields(fields.map((f) => f));
           }}
         />
@@ -1225,9 +1280,10 @@ const App = () => {
                     fields.forEach((f) => {
                       if (
                         mouseX > f.x &&
-                        mouseX < f.x + f.size &&
+                        mouseX <
+                          f.x + f.width * SZ_MULTIPLIER * (f.scale || 1) &&
                         mouseY > f.y &&
-                        mouseY < f.y + f.size
+                        mouseY < f.y + f.height * SZ_MULTIPLIER * (f.scale || 1)
                       ) {
                         fieldClicked = true;
                         return;
@@ -1257,8 +1313,9 @@ const App = () => {
                     selected: true,
                     highlighted: false,
                     id: fieldIndex + 1,
-                    size: 100,
                     rename: false,
+                    height: 18,
+                    width: 18,
                   };
 
                   setFields([
@@ -1276,10 +1333,11 @@ const App = () => {
                 <img
                   ref={guiImg}
                   draggable={false}
-                  src="http://localhost:736/assets/minecraft_inv_default.png"
+                  src={getResourcePath('minecraft_inv_default.png')}
                   style={{
                     minWidth: '960px',
                     maxWidth: '960px',
+                    imageRendering: 'pixelated',
                   }}
                 />
                 <div className="absolute top-0 left-0 w-full h-[calc(100vh-12rem/4)] pointer-events-none">
@@ -1313,19 +1371,29 @@ const App = () => {
                 >
                   <Accordion.Item label="Position">
                     <NumberInput
-                      defaultValue={editField.x}
+                      value={editField.x}
                       min={0}
-                      max={guiImg.current.offsetWidth - editField.size}
+                      max={
+                        guiImg.current.offsetWidth -
+                        editField.width * SZ_MULTIPLIER * (editField.scale || 1)
+                      }
                       onBlur={(e) => {
                         const i = fields.indexOf(editField);
                         const val = parseInt(e.currentTarget.value);
                         editField.x =
                           val >= 0 &&
-                          val <= guiImg.current.offsetWidth - editField.size
+                          val <=
+                            guiImg.current.offsetWidth -
+                              editField.width *
+                                SZ_MULTIPLIER *
+                                (editField.scale || 1)
                             ? val
                             : val < 0
                             ? 0
-                            : guiImg.current.offsetWidth - editField.size;
+                            : guiImg.current.offsetWidth -
+                              editField.width *
+                                SZ_MULTIPLIER *
+                                (editField.scale || 1);
                         setFields(
                           fields.map((f, index) => {
                             if (index == i) {
@@ -1344,19 +1412,31 @@ const App = () => {
                     />
                     <div className="my-2" />
                     <NumberInput
-                      defaultValue={editField.y}
+                      value={editField.y}
                       min={0}
-                      max={guiImg.current.offsetHeight - editField.size}
+                      max={
+                        guiImg.current.offsetHeight -
+                        editField.height *
+                          SZ_MULTIPLIER *
+                          (editField.scale || 1)
+                      }
                       onBlur={(e) => {
                         const i = fields.indexOf(editField);
                         const val = parseInt(e.currentTarget.value);
                         editField.y =
                           val >= 0 &&
-                          val <= guiImg.current.offsetHeight - editField.size
+                          val <=
+                            guiImg.current.offsetHeight -
+                              editField.height *
+                                SZ_MULTIPLIER *
+                                (editField.scale || 1)
                             ? val
                             : val < 0
                             ? 0
-                            : guiImg.current.offsetHeight - editField.size;
+                            : guiImg.current.offsetHeight -
+                              editField.height *
+                                SZ_MULTIPLIER *
+                                (editField.scale || 0);
                         setFields(
                           fields.map((f, index) => {
                             if (index == i) {
@@ -1376,33 +1456,53 @@ const App = () => {
                   </Accordion.Item>
                   <Accordion.Item label="Size">
                     <Slider
-                      disabled
-                      step={1}
-                      min={100}
-                      max={300}
-                      label={(v) => `x${v / 100}`}
-                      defaultValue={editField.size}
+                      min={0.25}
+                      max={4}
+                      label="Scale"
                       marks={[
-                        { value: 100, label: 'x1' },
-                        { value: 200, label: 'x2' },
-                        { value: 300, label: 'x3' },
+                        { value: 0.5, label: 'x0.5' },
+                        { value: 1, label: 'x1' },
+                        { value: 1.5, label: 'x1.5' },
+                        { value: 2, label: 'x2' },
+                        { value: 2.5, label: 'x2.5' },
+                        { value: 3, label: 'x3' },
+                        { value: 3.5, label: 'x3.5' },
+                        { value: 4, label: 'x4' },
                       ]}
-                      color="cyan"
-                      /* onChangeEnd={(e) => {
-                    const i = fields.indexOf(editField);
-                    editField.size = e;
-                    setFields(
-                      fields.map((f, index) => {
-                        if (index == i) {
-                          return editField;
-                        }
-                        return f;
-                      })
-                    );
-                  }} */
+                      step={0.1}
+                      value={editField.scale || 1}
+                      onChange={(v) => {
+                        editField.scale = v;
+                        const fieldIndex = fields.indexOf(editField);
+                        fields[fieldIndex].scale = v;
+                        setFields(fields.map((f) => f));
+                      }}
+                    />
+                    <NumberInput
+                      label="Scale"
+                      value={editField.scale || 1}
+                      onChange={(v) => {
+                        const fieldIndex = fields.indexOf(editField);
+                        fields[fieldIndex].scale = v;
+                        setFields(fields.map((f) => f));
+                      }}
+                      step={0.1}
+                      min={0.1}
+                      max={10}
+                      precision={2}
                     />
                   </Accordion.Item>
                   <Accordion.Item label="Item texture">
+                    {editField.texture && (
+                      <Alert
+                        icon={<IconAlertCircle />}
+                        title="Warning!"
+                        color="red"
+                      >
+                        Info: Item textures are only supported for standard
+                        fields (Fields without a field texture)
+                      </Alert>
+                    )}
                     <p>
                       Select an item texture to display over the slot texture.
                       Is useful to show the user which item or item type to put
@@ -1456,18 +1556,59 @@ const App = () => {
                         variant="outline"
                         onClick={() => {
                           setLoadingOverlay(true);
-                          fetch('http://localhost:736/openItemTexture')
-                            .then((res) => res.json())
-                            .then((res) => {
-                              setLoadingOverlay(false);
-                              const fieldIndex = fields.indexOf(editField);
-                              fields[fieldIndex].image = {
-                                opacity: 1.0,
-                                path: res.filePath[0],
-                                saturation: true,
-                              };
+                          Api.openItemTexture().then((file) => {
+                            setLoadingOverlay(false);
+                            if (!file) return;
+                            const fieldIndex = fields.indexOf(editField);
+                            fields[fieldIndex].image = {
+                              opacity: 1.0,
+                              path: file,
+                              saturation: true,
+                            };
+                            setFields(fields.map((f) => f));
+                          });
+                        }}
+                        disabled={!!editField.texture}
+                      >
+                        Load image!
+                      </Button>
+                    )}
+                  </Accordion.Item>
+                  <Accordion.Item label="Field texture">
+                    <p>
+                      Select the field texture (slot texture). This is useful
+                      when you want to have bigger fields than 16x16.
+                    </p>
+                    {editField.texture ? (
+                      <Button
+                        variant="outline"
+                        color="red"
+                        onClick={() => {
+                          const fieldIndex = fields.indexOf(editField);
+                          fields[fieldIndex].texture = undefined;
+                          fields[fieldIndex].width = 18;
+                          fields[fieldIndex].height = 18;
+                          setFields(fields.map((f) => f));
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setLoadingOverlay(true);
+                          Api.openItemTexture().then((file) => {
+                            setLoadingOverlay(false);
+                            if (!file) return;
+                            const fieldIndex = fields.indexOf(editField);
+                            fields[fieldIndex].texture = file;
+                            getImageSizes(file).then(({ width, height }) => {
+                              fields[fieldIndex].width = width;
+                              fields[fieldIndex].height = height;
                               setFields(fields.map((f) => f));
                             });
+                          });
                         }}
                       >
                         Load image!
@@ -1496,11 +1637,7 @@ const App = () => {
 
   const Start = () => {
     useEffect(() => {
-      fetch('http://localhost:736/recent')
-        .then((res) => res.json())
-        .then((res) => {
-          setRecent(res);
-        });
+      Api.getRecent().then(setRecent);
     }, []);
     return (
       <div className="bg-gray-200 dark:bg-gray-800 text-neutral-900 dark:text-white w-screen min-h-[calc(100vh-12rem/4)] grid place-items-center">
@@ -1511,7 +1648,7 @@ const App = () => {
                 className="opacity-75 hover:opacity-100 transition-opacity duration-100 cursor-pointer"
                 onClick={() => {
                   setScreen('editor');
-                  fetch('http://localhost:736/editor');
+                  Api.setEditorRpc();
                   setDocTitle('Unknown - Graintfa');
                 }}
               >
@@ -1650,14 +1787,7 @@ const App = () => {
     );
   };
 
-  const fetchSettings = () => {
-    fetch('http://localhost:736/settings')
-      .then((res) => res.json())
-      .then((res) => {
-        setSettings(res);
-      });
-  };
-
+  const fetchSettings = () => Api.getSettings().then(setSettings);
   const openSettings = () => {
     fetchSettings();
     modals.openModal({
@@ -1700,12 +1830,7 @@ const App = () => {
                   setSettings((s) => {
                     if (e != 'light' && e != 'dark') return;
                     s.theme = e;
-                    fetch('http://localhost:736/settings', {
-                      method: 'post',
-                      headers: {
-                        settings: JSON.stringify(s),
-                      },
-                    });
+                    Api.setSettings(s);
                     return s;
                   });
                 }}
@@ -1734,7 +1859,7 @@ const App = () => {
               <Button
                 variant="outline"
                 onClick={() => {
-                  fetch('http://localhost:736/recent/clear');
+                  Api.clearRecent();
                   setRecent([]);
                   showNotification({
                     message: 'Cleared recent files!',
@@ -1760,16 +1885,11 @@ const App = () => {
                 variant="outline"
                 color="red"
                 onClick={() => {
-                  fetch('http://localhost:736/recent/clear');
+                  Api.clearRecent();
                   setRecent([]);
                   setSettings((s) => {
                     s = undefined;
-                    fetch('http://localhost:736/settings/default', {
-                      method: 'post',
-                      headers: {
-                        settings: JSON.stringify(s),
-                      },
-                    });
+                    Api.defaultSettings();
                     askForClose(
                       () => {
                         window.location.reload();
@@ -1805,12 +1925,7 @@ const App = () => {
                   const on = e.currentTarget.checked;
                   setSettings((s) => {
                     s.keepNavOpen = on;
-                    fetch('http://localhost:736/settings', {
-                      method: 'post',
-                      headers: {
-                        settings: JSON.stringify(s),
-                      },
-                    });
+                    Api.setSettings(s);
                     return s;
                   });
                 }}
@@ -1825,12 +1940,7 @@ const App = () => {
                   const on = e.currentTarget.checked;
                   setSettings((s) => {
                     s.centerNav = on;
-                    fetch('http://localhost:736/settings', {
-                      method: 'post',
-                      headers: {
-                        settings: JSON.stringify(s),
-                      },
-                    });
+                    Api.setSettings(s);
                     return s;
                   });
                 }}
@@ -2011,11 +2121,11 @@ const App = () => {
             className={`${!keepNavOpen ? 'cursor-pointer' : ''}`}
           >
             <img
-              src="http://localhost:736/assets/logo_white.svg"
+              src={getResourcePath('logo_white.svg')}
               className="h-12 w-12 hidden dark:inline"
             />
             <img
-              src="http://localhost:736/assets/logo_black.svg"
+              src={getResourcePath('logo_black.svg')}
               className="h-12 w-12 inline dark:hidden"
             />
             {!keepNavOpen ? (
@@ -2080,7 +2190,7 @@ const App = () => {
     <>
       {loadingOverlay ? (
         <div className="grid place-items-center absolute w-full top-0 left-0">
-          <Button
+          {/* <Button
             color="red"
             className="z-50 mt-10"
             onClick={() => {
@@ -2088,7 +2198,7 @@ const App = () => {
             }}
           >
             Cancel
-          </Button>
+          </Button> */}
         </div>
       ) : (
         <></>
@@ -2100,39 +2210,32 @@ const App = () => {
           ref={titleBar}
         >
           <img
-            src="http://localhost:736/assets/logo_white.svg"
+            src={getResourcePath('logo_white.svg')}
             className="h-8 w-8 hidden dark:inline opacity-50"
           />
           <img
-            src="http://localhost:736/assets/logo_black.svg"
+            src={getResourcePath('logo_black.svg')}
             className="h-8 w-8 inline dark:hidden opacity-50"
           />
           <div className="my-auto w-full title-bar-drag">{docTitle}</div>
           <div className="flex flex-row cursor-pointer">
             <div
               className="h-full px-2 bg-white bg-opacity-0 hover:bg-opacity-25 transition-all duration-100"
-              onClick={() => {
-                fetch('http://localhost:736/program/minimize');
-              }}
+              onClick={Api.minmize}
             >
               <IconMinus className="my-auto h-full" />
             </div>
-            {/* <div
+            <div
               className="h-full px-2 bg-white bg-opacity-0 hover:bg-opacity-25 transition-all duration-100"
-              onClick={() => {
-                fetch('http://localhost:736/program/maximize');
-              }}
+              onClick={Api.maximize}
             >
               <IconBoxMultiple className="my-auto h-full" />
-            </div> */}
+            </div>
             <div
               className="h-full px-2 bg-[#ff3434] bg-opacity-0 hover:bg-opacity-100 transition-all duration-100"
               onClick={() => {
-                if (screen === 'editor')
-                  askForClose(() => {
-                    fetch('http://localhost:736/program/close');
-                  });
-                else fetch('http://localhost:736/program/close');
+                if (screen === 'editor') askForClose(Api.close);
+                else Api.close();
               }}
             >
               <IconX className="my-auto h-full" />
@@ -2162,11 +2265,7 @@ const Wrappers = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
 
   useEffect(() => {
-    fetch('http://localhost:736/theme')
-      .then((res) => res.json())
-      .then((res) => {
-        setTheme(res);
-      });
+    Api.getTheme().then(setTheme);
   }, []);
 
   return (

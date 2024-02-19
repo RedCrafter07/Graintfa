@@ -11,15 +11,13 @@ import path from 'path';
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
-import express from 'express';
-import chalk from 'chalk';
-import cors from 'cors';
 import { JsonDB } from 'node-json-db';
 import { Config } from 'node-json-db/dist/lib/JsonDBConfig';
 import fs from 'fs';
 
 import { resolveHtmlPath } from './util';
 import { setFilePath, setState, setUnknown } from './lib/rpc';
+import { Field, File } from '../renderer/api';
 
 export default class AppUpdater {
   constructor() {
@@ -33,11 +31,137 @@ const db = new JsonDB(new Config('userData', true, false, '/'));
 
 let mainWindow: BrowserWindow | null = null;
 
-ipcMain.on('ipc-example', async (event, arg) => {
-  const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
-  console.log(msgTemplate(arg));
-  event.reply('ipc-example', msgTemplate('pong'));
+ipcMain.handle('close', () => app.quit());
+ipcMain.handle('minimize', () => mainWindow.minimize());
+ipcMain.handle('maximize', () =>
+  mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize()
+);
+ipcMain.handle('save', async (ev, file: File) => {
+  const { fields, fieldIndex: fi, filePath: fn } = file;
+  const fieldIndex: number = parseInt(Array.isArray(fi) ? fi[0] : fi);
+  let filePath: string = Array.isArray(fn) ? fn[0] : fn;
+
+  if (!filePath || filePath == undefined || filePath == 'undefined') {
+    filePath = dialog.showSaveDialogSync(mainWindow, {
+      buttonLabel: 'Save',
+      title: 'Save GUI',
+      filters: [
+        {
+          extensions: ['rgraintf'],
+          name: 'Graintfa file',
+        },
+      ],
+      properties: ['showOverwriteConfirmation'],
+    });
+  }
+  if (!filePath) return;
+
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      fieldIndex: fieldIndex,
+      fields: fields,
+    })
+  );
+
+  await addRecent(filePath);
+
+  setFilePath(filePath);
+
+  return filePath;
 });
+ipcMain.handle('open', async (ev, file?: string | string[] | undefined) => {
+  let filePath: string[] = Array.isArray(file)
+    ? file
+    : file === undefined
+    ? []
+    : [file];
+  if (
+    !filePath ||
+    filePath.includes('undefined') ||
+    filePath.includes(undefined) ||
+    filePath.length < 1
+  )
+    filePath = dialog.showOpenDialogSync(mainWindow, {
+      buttonLabel: 'Open',
+      title: 'Open a GUI',
+      filters: [
+        {
+          extensions: ['rgraintf'],
+          name: 'Graintfa file',
+        },
+      ],
+      properties: ['openFile'],
+    });
+
+  if (!filePath?.[0]) return;
+  const content = fs.readFileSync(filePath[0], { encoding: 'utf8' });
+
+  const parsedContent: {
+    fieldIndex: number;
+    fields: Field[];
+  } = JSON.parse(content);
+
+  await addRecent(filePath[0]);
+
+  setFilePath(filePath[0]);
+
+  return {
+    ...parsedContent,
+    filePath: filePath[0],
+  };
+});
+ipcMain.handle('openItemTexture', async () => {
+  const filePath = await dialog.showOpenDialogSync(mainWindow, {
+    buttonLabel: 'Load',
+    title: 'Item texture',
+    filters: [
+      {
+        extensions: ['png'],
+        name: 'Minecraft texture file',
+      },
+    ],
+    properties: ['openFile'],
+  });
+
+  return filePath?.[0];
+});
+ipcMain.handle('getImage', async (ev, path) => {
+  const img = fs.readFileSync(path).toString('base64');
+  return img;
+});
+ipcMain.handle('setEditorRpc', () => setUnknown());
+ipcMain.handle('getRecent', async () => {
+  let recent: string[] = [];
+  try {
+    recent = await db.getData('/recent');
+  } catch (err) {
+    recent = [];
+    await db.push('/recent', []);
+  }
+  setState('In the main menu');
+  return recent;
+});
+ipcMain.handle('clearRecent', () => db.push('/recent', []));
+ipcMain.handle('getSettings', async () => {
+  defaultSettings.forEach(async (s) => {
+    if (!db.exists(s.path)) await db.push(s.path, s.value);
+  });
+  const d = await db.getData('/settings');
+
+  return d;
+});
+ipcMain.handle('setSettings', async (ev, settings) =>
+  db.push('/settings', settings)
+);
+ipcMain.handle('defaultSettings', () => db.push('/settings', {}));
+ipcMain.handle('getTheme', async () => {
+  if (!db.exists('/settings/theme')) await db.push('/settings/theme', 'dark');
+  const theme = await db.getData('/settings/theme');
+
+  return theme;
+});
+ipcMain.handle('getResourcePath', () => RESOURCES_PATH);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -85,6 +209,7 @@ const createWindow = async () => {
     frame: false,
     webPreferences: {
       webSecurity: false,
+      preload: path.join(__dirname, 'renderer.js'),
     },
   });
 
@@ -144,156 +269,6 @@ app
   })
   .catch(console.log);
 
-type Field = {
-  x: number;
-  y: number;
-  name: string;
-  selected: boolean;
-  highlighted: boolean;
-  id: number;
-  size: number;
-  image?: {
-    opacity: number;
-    path: string;
-    saturation: boolean;
-  };
-  rename: boolean;
-};
-
-const server = express();
-
-server.use(cors());
-
-server.get('/assets/:asset', (req, res) => {
-  const path = getAssetPath(req.params.asset);
-  res.sendFile(path);
-});
-
-server.get('/program/close', (req, res) => {
-  app.quit();
-  res.status(200);
-});
-server.get('/program/maximize', (req, res) => {
-  if (mainWindow.isMaximized()) mainWindow.unmaximize();
-  else mainWindow.maximize();
-  res.status(200);
-});
-server.get('/program/minimize', (req, res) => {
-  mainWindow.minimize();
-  res.status(200);
-});
-
-server.post('/save', async (req, res) => {
-  const { fields: f, fieldindex: fi, filepath: fn } = req.headers;
-  const fields: Field[] = JSON.parse(Array.isArray(f) ? f[0] : f);
-  const fieldIndex: number = parseInt(Array.isArray(fi) ? fi[0] : fi);
-  let filePath: string = Array.isArray(fn) ? fn[0] : fn;
-
-  if (!filePath || filePath == undefined || filePath == 'undefined') {
-    filePath = await dialog.showSaveDialogSync(mainWindow, {
-      buttonLabel: 'Save',
-      title: 'Save GUI',
-      filters: [
-        {
-          extensions: ['rgraintf'],
-          name: 'Graintfa file',
-        },
-      ],
-      properties: ['showOverwriteConfirmation'],
-    });
-  }
-
-  await fs.writeFileSync(
-    filePath,
-    JSON.stringify({
-      fieldIndex: fieldIndex,
-      fields: fields,
-    })
-  );
-
-  res.status(200).json({ filePath });
-
-  await addRecent(filePath);
-
-  setFilePath(filePath);
-});
-
-server.get('/open', async (req, res) => {
-  let filePath: string[] = Array.isArray(req.headers.filepath)
-    ? req.headers.filepath
-    : [req.headers.filepath];
-  if (!filePath || filePath.includes('undefined'))
-    filePath = await dialog.showOpenDialogSync(mainWindow, {
-      buttonLabel: 'Open',
-      title: 'Open a GUI',
-      filters: [
-        {
-          extensions: ['rgraintf'],
-          name: 'Graintfa file',
-        },
-      ],
-      properties: ['openFile'],
-    });
-
-  const content = await fs.readFileSync(filePath[0], { encoding: 'utf8' });
-
-  const parsedContent: {
-    fieldIndex: number;
-    fields: Field[];
-  } = JSON.parse(content);
-
-  res.status(200).json({ ...parsedContent, filePath: filePath[0] });
-
-  await addRecent(filePath[0]);
-
-  setFilePath(filePath[0]);
-});
-
-server.get('/openItemTexture', async (req, res) => {
-  const filePath = await dialog.showOpenDialogSync(mainWindow, {
-    buttonLabel: 'Load',
-    title: 'Item texture',
-    filters: [
-      {
-        extensions: ['png'],
-        name: 'Minecraft texture file',
-      },
-    ],
-    properties: ['openFile'],
-  });
-
-  res.status(200).json({ filePath });
-});
-
-server.get('/image/:path', async (req, res) => {
-  const img = await fs.readFileSync(req.params.path).toString('base64');
-  res.send(img);
-});
-
-server.get('/editor', (req, res) => {
-  setUnknown();
-  res.status(200);
-});
-
-server.get('/recent', async (req, res) => {
-  let recent: string[] = [];
-  try {
-    recent = await db.getData('/recent');
-  } catch (err) {
-    recent = [];
-    await db.push('/recent', []);
-  }
-
-  res.json(recent).status(200);
-
-  setState('In the main menu');
-});
-
-server.get('/recent/clear', async (req, res) => {
-  await db.push('/recent', []);
-  res.status(200);
-});
-
 const defaultSettings: { path: string; value: number | string | boolean }[] = [
   {
     path: '/settings/theme',
@@ -308,36 +283,6 @@ const defaultSettings: { path: string; value: number | string | boolean }[] = [
     value: false,
   },
 ];
-
-server.get('/settings', async (req, res) => {
-  defaultSettings.forEach(async (s) => {
-    if (!db.exists(s.path)) await db.push(s.path, s.value);
-  });
-  const d = await db.getData('/settings');
-
-  res.status(200).json(d);
-});
-
-server.post('/settings', async (req, res) => {
-  const s = JSON.parse(
-    Array.isArray(req.headers.settings)
-      ? req.headers.settings[0]
-      : req.headers.settings
-  );
-  db.push('/settings', s);
-  res.status(200);
-});
-
-server.post('/settings/default', async (req, res) => {
-  db.push('/settings', {});
-});
-
-server.get('/theme', async (req, res) => {
-  if (!db.exists('/settings/theme')) await db.push('/settings/theme', 'dark');
-  const theme = await db.getData('/settings/theme');
-
-  res.status(200).json(theme);
-});
 
 async function addRecent(filePath: string) {
   let recent: string[] = [];
@@ -356,7 +301,3 @@ async function addRecent(filePath: string) {
 
   await db.push('/recent', recent);
 }
-
-server.listen(736, () => {
-  console.log(chalk.green('[SERVER]: Listening on port 736!'));
-});
